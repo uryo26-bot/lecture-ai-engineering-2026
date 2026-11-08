@@ -4,11 +4,13 @@ TestModel は実際のLLMを呼ばない偽モデルで、登録されたツー�
 ダミーの回答を返す。APIキーも利用枠も使わずに、
 「ツールが登録され、呼ばれ、結果がモデルに戻るか」を確かめられる。
 """
+import json
 
-from pydantic_ai import DeferredToolRequests
+from pydantic_ai import DeferredToolRequests, ToolDenied
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.test import TestModel
 
+from app import tools
 from app.agent import agent
 
 BASE_TOOLS = {"search_glossary", "get_lecture_summary"}
@@ -40,3 +42,59 @@ def test_glossary_result_reaches_the_model():
         result = agent.run_sync("RAGとは？")
     returns = _parts(result, ToolReturnPart)
     assert returns and returns[0].tool_name == "search_glossary"
+
+
+def test_save_learning_log_is_saved_only_after_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LOG_DIR", tmp_path)
+
+    first = agent.run_sync(
+        "学習記録を保存してください",
+        model=TestModel(call_tools=["save_learning_log"]),
+    )
+
+    assert isinstance(first.output, DeferredToolRequests)
+    assert len(first.output.approvals) == 1
+    assert list(tmp_path.iterdir()) == []
+
+    call = first.output.approvals[0]
+    call_args = call.args_as_dict()
+    deferred_results = first.output.build_results(
+        approvals={call.tool_call_id: True}
+    )
+
+    final = agent.run_sync(
+        None,
+        model=TestModel(call_tools=[]),
+        message_history=first.all_messages(),
+        deferred_tool_results=deferred_results,
+    )
+
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    assert json.loads(files[0].read_text(encoding="utf-8")) == call_args
+    assert isinstance(final.output, str)
+
+def test_save_learning_log_is_not_saved_after_denial(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LOG_DIR", tmp_path)
+
+    first = agent.run_sync(
+        "学習記録を保存してください",
+        model=TestModel(call_tools=["save_learning_log"]),
+    )
+
+    assert isinstance(first.output, DeferredToolRequests)
+    call = first.output.approvals[0]
+    deferred_results = first.output.build_results(
+        approvals={
+            call.tool_call_id: ToolDenied("利用者が拒否しました")
+        }
+    )
+
+    agent.run_sync(
+        None,
+        model=TestModel(call_tools=[]),
+        message_history=first.all_messages(),
+        deferred_tool_results=deferred_results,
+    )
+
+    assert list(tmp_path.iterdir()) == []
