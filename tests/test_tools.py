@@ -3,6 +3,8 @@
 import json
 
 from app import tools
+from app.agent import agent
+
 
 
 def test_glossary_ids_are_unique_and_related_links_exist():
@@ -46,3 +48,17 @@ def test_default_question_of_lecture1_is_answerable_from_glossary():
     assert "3レベル" in DEFAULT_QUESTION
     hits = json.loads(tools.search_glossary("3レベル"))
     assert hits[0]["term"] == "宿題の3レベル"
+
+
+def test_save_learning_log_writes_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools, "LOG_DIR", tmp_path)
+
+    result = tools.save_learning_log("テスト", "学んだ内容")
+
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    assert json.loads(files[0].read_text(encoding="utf-8")) == {
+        "topic": "テスト",
+        "note": "学んだ内容",
+    }
+    assert files[0].name in result

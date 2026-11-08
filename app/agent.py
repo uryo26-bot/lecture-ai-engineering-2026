@@ -16,7 +16,8 @@ import inspect
 import json
 from pathlib import Path
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests, ToolDenied
+
 from pydantic_ai.exceptions import ModelHTTPError
 from fastmcp import Client
 from pydantic_ai.mcp import MCPToolset, StdioTransport
@@ -24,7 +25,6 @@ from pydantic_ai.messages import ToolCallPart, ToolReturnPart
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.providers.google import GoogleProvider
-
 from app import tools
 from app.config import MODEL, api_error_message, get_api_key
 
@@ -35,14 +35,16 @@ INSTRUCTIONS = """\
 - 用語集に見つからないことは、推測で断定せず「用語集にはない」と伝える。
 - 回答の最後に、関係する回（第N回）を示す。
 - 宿題の答えそのものは書かず、考え方のヒントで導く。
+- 利用者が学習記録の保存を依頼した場合は、回答文で承認を求めず、必ず save_learning_log ツールを呼び出す。
+- save_learning_log の承認待ちが返った後は、利用者の承認結果に従う。
 """
 
 # モデルは実行時に渡す（テストではAPIを呼ばない TestModel に差し替えるため）
-agent = Agent(instructions=INSTRUCTIONS)
+agent = Agent(instructions=INSTRUCTIONS,output_type=[str, DeferredToolRequests] )
 agent.tool_plain(tools.search_glossary)
 agent.tool_plain(tools.get_lecture_summary)
 agent.tool_plain(tools.make_quiz)
-
+agent.tool_plain(tools.save_learning_log, requires_approval=True)
 # TODO(第3回 演習): tools.py に make_quiz を作り、ここで登録しよう
 
 # 第5回: 使う MCP サーバーの設定ファイル。Claude Desktop や Cursor と同じ "mcpServers" 形式
@@ -130,6 +132,28 @@ def main() -> None:
         print("[tools] MCP サーバー（app/mcp_servers.json）")
     try:
         result = target.run_sync(args.question, model=build_model())
+
+        while isinstance(result.output, DeferredToolRequests):
+            approvals = {}
+
+            for call in result.output.approvals:
+                tool_args = call.args_as_dict()
+                print(f"トピック: {tool_args['topic']}")
+                print(f"記録: {tool_args['note']}")
+
+                approved = input("この内容を保存しますか？ [y/N] ").strip().lower() == "y"
+                approvals[call.tool_call_id] = (
+                    True if approved else ToolDenied("利用者が保存を拒否しました")
+                    )
+
+            deferred_results = result.output.build_results(approvals=approvals)
+            history = result.all_messages()
+            result = target.run_sync(
+                None,
+                model=build_model(),
+                message_history=history,
+                deferred_tool_results=deferred_results,
+                )
     except ModelHTTPError as e:
         print(api_error_message(e.status_code, str(e.body)[:200]))
         raise SystemExit(1)

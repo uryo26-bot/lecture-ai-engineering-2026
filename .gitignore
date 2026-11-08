@@ -7,8 +7,5 @@ __pycache__/
 .env
 .env.*
 
-# 個人の学習ログ（第3回の宿題で作成）は共有しない
-learning_log/
-
 # macOS
 .DS_Store

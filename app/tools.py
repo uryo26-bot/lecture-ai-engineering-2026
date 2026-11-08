@@ -8,6 +8,7 @@ import json
 import random
 from functools import cache
 from pathlib import Path
+from datetime import datetime
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MAX_RESULTS = 3
@@ -100,3 +101,14 @@ def make_quiz(lecture: int) -> str:
         },
         ensure_ascii=False,
     )
+
+#learning_log/ フォルダに保存するツール save_learning_logで使用する保存先
+LOG_DIR = Path(__file__).resolve().parent.parent / "learning_log"
+
+def save_learning_log(topic: str, note: str) -> str:
+    """学習の記録を保存する。保存前に利用者の確認を得ること。"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    path = LOG_DIR / f"{datetime.now():%Y%m%d_%H%M%S_%f}.json"
+    with path.open("x", encoding="utf-8") as f:
+        json.dump({"topic": topic, "note": note}, f, ensure_ascii=False)
+    return f"保存しました: {path.name}"
